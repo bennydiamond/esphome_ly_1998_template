@@ -1,0 +1,297 @@
+# ==========================================
+# Tuya Curtain Template Package
+# tuya_curtain_ly1998_template.yaml
+# ==========================================
+
+substitutions:
+  cover_name: "Curtain"
+  cover_id: id_cover_opaque
+  entity_name_prefix: "Curtain"
+  uart_tx_gpio: GPIO21
+  uart_rx_gpio: GPIO20
+  watchdog_pin: GPIO10
+
+globals:
+  - id: ${cover_id}_current_calibration_stage
+    type: int
+    restore_value: false
+    initial_value: '0' # 0 represents Idle
+                       # 1 represents at fully closed position
+                       # 2 represents moving toward upper limit
+                       # 3 represents Calibration complete
+  - id: ${cover_id}_is_calibrated
+    type: bool
+    restore_value: true
+    initial_value: 'false'
+
+# ==========================================
+# TuyaMCU UART Definition
+# ==========================================
+uart:
+  id: ${cover_id}_tuya_uart
+  rx_pin: ${uart_rx_gpio}
+  tx_pin: ${uart_tx_gpio}
+  baud_rate: 9600
+
+tuya:
+  id: ${cover_id}_tuya_curtain
+  uart_id: ${cover_id}_tuya_uart
+  ignore_mcu_update_on_datapoints:
+    - 108 # pairing stuff
+    - 104 # light sensor
+    - 106 # light sensor threshold
+    - 110 # Accessory battery level. Not working.
+  on_datapoint_update:
+    # ----------------------------------------------------
+    # Catch MCU DPID 4 Updates (True Hardware State)
+    # ----------------------------------------------------
+    - sensor_datapoint: 4
+      datapoint_type: enum
+      then:
+        - lambda: |-
+            if (x == 0) {
+              id(${cover_id}_is_calibrated) = false;
+              if (id(${cover_id}_current_calibration_stage) > 1) {
+                id(${cover_id}_current_calibration_stage) = 0;
+              }
+            } 
+            else if (x == 1) {
+              id(${cover_id}_is_calibrated) = true;
+              id(${cover_id}_current_calibration_stage) = 3;
+            } 
+            else if (x == 3) {
+              id(${cover_id}_current_calibration_stage) = 2;
+            }
+            ESP_LOGD("calib", "MCU DP4 (Work State) updated to: %d", x);
+            
+    # ----------------------------------------------------
+    # Catch MCU DPID 102 Updates (Intelligent Tracking)
+    # ----------------------------------------------------
+    - sensor_datapoint: 102
+      datapoint_type: enum
+      then:
+        - lambda: |-
+            if (x == 2) {
+              if (id(${cover_id}_current_calibration_stage) == 0) {
+                id(${cover_id}_current_calibration_stage) = 1;
+                ESP_LOGD("calib", "External Reset detected via DP102. Stage -> 1");
+              }
+            } 
+            else if (x == 1) {
+              if (id(${cover_id}_current_calibration_stage) == 2) {
+                id(${cover_id}_current_calibration_stage) = 3;
+                id(${cover_id}_is_calibrated) = true;
+                ESP_LOGD("calib", "External Commit detected via DP102. Stage -> 3");
+              }
+            }
+
+    # ----------------------------------------------------
+    # Catch MCU DPID 8 Updates (Reset Parameters Switch)
+    # ----------------------------------------------------
+    - sensor_datapoint: 8
+      datapoint_type: bool
+      then:
+        - lambda: |-
+            if (x) {
+              id(${cover_id}_current_calibration_stage) = 0;
+              id(${cover_id}_is_calibrated) = false;
+              ESP_LOGD("calib", "Reset Parameters toggled. Stage reset to Idle.");
+            }
+
+binary_sensor:
+  - platform: gpio
+    name: "${entity_name_prefix}: TuyaMCU Watchdog Trigger"
+    id: ${cover_id}_watchdog_trigger
+    entity_category: diagnostic
+    pin:
+      number: ${watchdog_pin}
+      mode:
+        input: true
+      inverted: true
+
+  - platform: template
+    name: "${entity_name_prefix}: Device is calibrated"
+    id: ${cover_id}_calibration_status_sensor
+    icon: "mdi:ruler-square-compass"
+    lambda: |-
+      return id(${cover_id}_is_calibrated);
+
+# ==========================================
+# Core Curtain Control
+# ==========================================
+cover:
+  - platform: tuya
+    name: "${cover_name}"
+    id: ${cover_id}
+    control_datapoint: 1
+    position_datapoint: 2
+    position_report_datapoint: 3
+    invert_position_report: true
+
+# ==========================================
+# Telemetry & Sensors
+# ==========================================
+sensor:
+  - platform: tuya
+    name: "${entity_name_prefix}: Battery Level"
+    id: ${cover_id}_battery_level
+    sensor_datapoint: 6
+    device_class: battery
+    unit_of_measurement: "%"
+
+  - platform: tuya
+    name: "${entity_name_prefix}: Current Temperature"
+    id: ${cover_id}_current_temperature
+    sensor_datapoint: 7
+    device_class: temperature
+    unit_of_measurement: "°C"
+
+  - platform: tuya
+    name: "${entity_name_prefix}: Fault Code"
+    id: ${cover_id}_fault_code
+    sensor_datapoint: 5
+
+text_sensor:
+  - platform: tuya
+    name: "${entity_name_prefix}: Work State"
+    id: ${cover_id}_work_state
+    internal: true
+    sensor_datapoint: 4
+    
+  - platform: template
+    name: "${entity_name_prefix}: Calibration Stage"
+    id: ${cover_id}_calibration_stage_sensor
+    icon: "mdi:state-machine"
+    entity_category: diagnostic
+    update_interval: 1s
+    lambda: |-
+      switch (id(${cover_id}_current_calibration_stage)) {
+        case 1:
+          return std::string("Step 1: Curtains already fully closed");
+        case 2:
+          return std::string("Step 2: Mapping Limits (Move to 100%)");
+        case 3:
+          return std::string("Step 3: Calibration complete");
+        case 0:
+        default:
+          return std::string("Idle");
+      }
+
+# ==========================================
+# Switches (Booleans)
+# ==========================================
+switch:
+  - platform: tuya
+    name: "${entity_name_prefix}: Reset Parameters"
+    id: ${cover_id}_tuya_switch_reset_params
+    entity_category: config
+    switch_datapoint: 8
+    on_turn_on:
+      then:
+        - delay: 1500ms
+        - switch.turn_off: ${cover_id}_tuya_switch_reset_params
+
+  - platform: tuya
+    name: "${entity_name_prefix}: Motor Reversal"
+    id: ${cover_id}_motor_reversal
+    entity_category: config
+    switch_datapoint: 111
+
+# ==========================================
+# Adjustable Parameters (Numbers)
+# ==========================================
+number:
+  - platform: tuya
+    name: "${entity_name_prefix}: Temperature Threshold"
+    id: ${cover_id}_temperature_threshold
+    entity_category: config
+    number_datapoint: 9
+    min_value: 10
+    max_value: 60
+    step: 10
+    unit_of_measurement: "°C"
+
+# ==========================================
+# Configuration Options (Enums)
+# ==========================================
+select:
+  - platform: tuya
+    name: "${entity_name_prefix}: Curtain Default End"
+    id: ${cover_id}_curtain_default_end
+    entity_category: config
+    enum_datapoint: 101
+    options:
+      0: "Left"
+      1: "Right"
+
+  - platform: tuya
+    name: "${entity_name_prefix}: Motor Mode"
+    id: ${cover_id}_motor_mode
+    entity_category: config
+    enum_datapoint: 103
+    options:
+      0: "Strong"
+      1: "Normal"
+
+  - platform: tuya
+    name: "${entity_name_prefix}: Learning Mode"
+    id: ${cover_id}_learning_mode
+    entity_category: config
+    internal: true
+    enum_datapoint: 102
+    options:
+      2: "Reset and move to fully closed"
+      0: "Trigger motors to start opening"
+      1: "Stop and commit upper limit"
+
+# ==========================================
+# Action Buttons (Triggers)
+# ==========================================
+button:
+  - platform: template
+    name: "${entity_name_prefix}: Check Timers"
+    id: ${cover_id}_check_timers
+    entity_category: config
+    disabled_by_default: true
+    icon: "mdi:timer-sync"
+    on_press:
+      - lambda: 'id(${cover_id}_tuya_curtain).set_enum_datapoint_value(109, 0);'
+
+  - platform: template
+    name: "${entity_name_prefix}: Calibration 1: Reset & Enter"
+    id: ${cover_id}_calib_btn_1
+    icon: "mdi:lock-reset"
+    entity_category: config
+    on_press:
+      - lambda: |-
+          id(${cover_id}_tuya_curtain).force_set_enum_datapoint_value(102, 2);
+          id(${cover_id}_current_calibration_stage) = 1;
+
+  - platform: template
+    name: "${entity_name_prefix}: Calibration 2: Start Mapping"
+    id: ${cover_id}_calib_btn_2
+    icon: "mdi:arrow-expand-horizontal"
+    entity_category: config
+    on_press:
+      - lambda: |-
+          if (id(${cover_id}_current_calibration_stage) == 1) {
+            id(${cover_id}_tuya_curtain).force_set_enum_datapoint_value(102, 0);
+            id(${cover_id}_current_calibration_stage) = 2;
+          } else {
+            ESP_LOGW("calib", "Ignored Step 2: You must complete Step 1 first.");
+          }
+
+  - platform: template
+    name: "${entity_name_prefix}: Calibration 3: Commit & Save"
+    id: ${cover_id}_calib_btn_3
+    icon: "mdi:content-save-check"
+    entity_category: config
+    on_press:
+      - lambda: |-
+          if (id(${cover_id}_current_calibration_stage) == 2) {
+            id(${cover_id}_tuya_curtain).force_set_enum_datapoint_value(102, 1);
+            id(${cover_id}_current_calibration_stage) = 3;
+            id(${cover_id}_is_calibrated) = true; 
+          } else {
+            ESP_LOGW("calib", "Ignored Step 3: You must complete Step 2 first.");
+          }
