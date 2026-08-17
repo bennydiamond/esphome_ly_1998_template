@@ -120,13 +120,57 @@ binary_sensor:
 # Core Curtain Control
 # ==========================================
 cover:
+  # 1. The Real Hardware Cover (Hidden from Home Assistant)
   - platform: tuya
-    name: "${cover_name}"
-    id: ${cover_id}
+    name: "${cover_name} Internal"
+    id: ${cover_id}_internal
+    internal: true
     control_datapoint: 1
     position_datapoint: 2
     position_report_datapoint: 3
     invert_position_report: true
+
+  # 2. The Public-Facing Template Cover (Replaces original in HA)
+  - platform: template
+    name: "${cover_name}"
+    id: ${cover_id}
+    device_class: curtain
+    has_position: true
+    
+    # Repeatedly polls the internal cover to mirror its exact position
+    lambda: |-
+      return id(${cover_id}_internal).position;
+      
+    open_action:
+      - lambda: |-
+          // Grab the active index of DP103 (0 for Strong, 1 for Normal) and force send it
+          uint8_t mode = id(${cover_id}_motor_mode).active_index().value_or(0);
+          id(${cover_id}_tuya_curtain).force_set_enum_datapoint_value(103, mode);
+      - delay: 50ms # Brief pause to let the MCU process the DP103 packet
+      - cover.open: ${cover_id}_internal
+
+    close_action:
+      - lambda: |-
+          uint8_t mode = id(${cover_id}_motor_mode).active_index().value_or(0);
+          id(${cover_id}_tuya_curtain).force_set_enum_datapoint_value(103, mode);
+      - delay: 50ms
+      - cover.close: ${cover_id}_internal
+
+    stop_action:
+      - lambda: |-
+          uint8_t mode = id(${cover_id}_motor_mode).active_index().value_or(0);
+          id(${cover_id}_tuya_curtain).force_set_enum_datapoint_value(103, mode);
+      - delay: 50ms
+      - cover.stop: ${cover_id}_internal
+
+    position_action:
+      - lambda: |-
+          uint8_t mode = id(${cover_id}_motor_mode).active_index().value_or(0);
+          id(${cover_id}_tuya_curtain).force_set_enum_datapoint_value(103, mode);
+      - delay: 50ms
+      - cover.control:
+          id: ${cover_id}_internal
+          position: !lambda "return pos;"
 
 # ==========================================
 # Telemetry & Sensors
