@@ -142,32 +142,48 @@ cover:
       return id(${cover_id}_internal).position;
       
     open_action:
-      - lambda: |-
-          // Grab the active index of DP103 (0 for Strong, 1 for Normal) and force send it
-          uint8_t mode = id(${cover_id}_motor_mode).active_index().value_or(0);
-          id(${cover_id}_tuya_curtain).force_set_enum_datapoint_value(103, mode);
-      - delay: 50ms # Brief pause to let the MCU process the DP103 packet
+#      - lambda: |-
+#          // Grab the active index of DP103 (0 for Strong, 1 for Normal) and force send it
+#          uint8_t mode = id(${cover_id}_motor_mode).active_index().value_or(0);
+#          id(${cover_id}_tuya_curtain).force_set_enum_datapoint_value(103, mode);
+      - cover.open: ${cover_id}_internal
+      - delay: 30ms # Brief pause to let the MCU process
+      - cover.open: ${cover_id}_internal
+      - delay: 30ms # Brief pause to let the MCU process
       - cover.open: ${cover_id}_internal
 
     close_action:
-      - lambda: |-
-          uint8_t mode = id(${cover_id}_motor_mode).active_index().value_or(0);
-          id(${cover_id}_tuya_curtain).force_set_enum_datapoint_value(103, mode);
-      - delay: 50ms
+#      - lambda: |-
+#          uint8_t mode = id(${cover_id}_motor_mode).active_index().value_or(0);
+#          id(${cover_id}_tuya_curtain).force_set_enum_datapoint_value(103, mode);
+      - cover.close: ${cover_id}_internal
+      - delay: 30ms
+      - cover.close: ${cover_id}_internal
+      - delay: 30ms
       - cover.close: ${cover_id}_internal
 
     stop_action:
-      - lambda: |-
-          uint8_t mode = id(${cover_id}_motor_mode).active_index().value_or(0);
-          id(${cover_id}_tuya_curtain).force_set_enum_datapoint_value(103, mode);
-      - delay: 50ms
+#      - lambda: |-
+#          uint8_t mode = id(${cover_id}_motor_mode).active_index().value_or(0);
+#          id(${cover_id}_tuya_curtain).force_set_enum_datapoint_value(103, mode);
+      - cover.stop: ${cover_id}_internal
+      - delay: 30ms
+      - cover.stop: ${cover_id}_internal
+      - delay: 30ms
       - cover.stop: ${cover_id}_internal
 
     position_action:
-      - lambda: |-
-          uint8_t mode = id(${cover_id}_motor_mode).active_index().value_or(0);
-          id(${cover_id}_tuya_curtain).force_set_enum_datapoint_value(103, mode);
-      - delay: 50ms
+#      - lambda: |-
+#          uint8_t mode = id(${cover_id}_motor_mode).active_index().value_or(0);
+#          id(${cover_id}_tuya_curtain).force_set_enum_datapoint_value(103, mode);
+      - cover.control:
+          id: ${cover_id}_internal
+          position: !lambda "return pos;"
+      - delay: 30ms
+      - cover.control:
+          id: ${cover_id}_internal
+          position: !lambda "return pos;"
+      - delay: 30ms
       - cover.control:
           id: ${cover_id}_internal
           position: !lambda "return pos;"
